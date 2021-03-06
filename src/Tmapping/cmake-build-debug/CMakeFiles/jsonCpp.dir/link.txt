@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -g  -shared -Wl,-soname,libjsonCpp.so -o devel/lib/libjsonCpp.so CMakeFiles/jsonCpp.dir/jsonCpp_autogen/mocs_compilation.cpp.o CMakeFiles/jsonCpp.dir/include/json/jsoncpp.cpp.o 

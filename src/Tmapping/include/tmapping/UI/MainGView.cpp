@@ -1,0 +1,1000 @@
+//
+// Created by stumbo on 2019/12/20.
+//
+
+#include <iostream>
+#include <queue>
+#include <fstream>
+#include <QWheelEvent>
+#include <QStyleOptionGraphicsItem>
+#include <chrono>
+#include <random>
+
+#include "MainGView.h"
+#include "tmapping/MergedExp.h"
+#include "tmapping/Exp.h"
+#include "UITools.h"
+
+
+
+using namespace std;
+
+
+
+
+tmap::MainGView::MainGView(QWidget* parent) : QGraphicsView(parent)
+{
+    setScene(&mScene4FakeMap);
+    /// 设置默认的缩放系数, 缩小至0.75倍
+    setMatrix(transform().scale(0.75, 0.75).toAffine());
+}
+
+static constexpr double SCALE_MAX = 10.0;
+static constexpr double SCALE_TIME = 1.2;
+
+void tmap::MainGView::wheelEvent(QWheelEvent* event)
+{
+    if (event->modifiers() & Qt::ControlModifier) {
+        auto curTrans = transform();
+        auto curScale = curTrans.m11();
+        if (event->delta() > 0 && curScale <= SCALE_MAX) {
+            curTrans.scale(SCALE_TIME, SCALE_TIME);
+        }
+        else if (event->delta() < 0 && curScale >= 1 / SCALE_MAX) {
+            curTrans.scale(1 / SCALE_TIME, 1 / SCALE_TIME);
+        }
+        setMatrix(curTrans.toAffine());
+    } else {
+        QGraphicsView::wheelEvent(event);
+    }
+}
+
+
+void tmap::MainGView::ModifyLineData(const char* fileName, int lineNum, const char* lineData)
+{
+    ifstream in;
+    in.open(fileName);
+    string strFileData = "";
+    int line = 1;
+    char tmpLineData[1024] = {0};
+    while(in.getline(tmpLineData, sizeof(tmpLineData)))
+    {
+        if (line == lineNum)
+        {
+            strFileData += lineData;
+            strFileData += "\n";
+        }
+        else
+        {
+            strFileData += tmpLineData;
+            strFileData += "\n";
+        }
+        line++;
+    }
+    in.close();
+    //写入文件
+    ofstream out;
+    out.open(fileName);
+    out.flush();
+    out<<strFileData;
+    out.close();
+}
+
+void tmap::MainGView::addNode2FakeMapFromExpData(const tmap::ExpDataPtr& usedExpData)
+{
+    auto qNode = QNode::makeOneFromExpData(usedExpData, mMoveStragety);
+    mNodesInFakeMap.insert(qNode);
+    mScene4FakeMap.addItem(qNode.get());
+    setQNodeMovabilityInFakeMap(qNode.get());
+    qNode->setPos(sceneRect().center());
+}
+
+void tmap::MainGView::SLOT_EnableMoving4FakeNodes(bool enableMove)
+{
+    cout << "The nodes mobility of standard map is " << (enableMove ? "ON" : "OFF") << endl;
+    mEnableFakeNodesMoving = enableMove;
+    for (auto& item : mScene4FakeMap.items()) {
+        if (auto qNode = dynamic_cast<QNode*>(item)) {
+            setQNodeMovabilityInFakeMap(qNode);
+        }
+    }
+}
+
+void tmap::MainGView::SLOT_EnableMoving4RealNodes(bool enableMove)
+{
+    cout << "The nodes mobility of realtime map is " << (enableMove ? "ON" : "OFF") << endl;
+    mEnableRealNodesMoving = enableMove;
+    for (auto& item : mScene4RealMap.items()) {
+        if (auto qNode = dynamic_cast<QNode*>(item)) {
+            setQNodeMovabilityInRealMap(qNode);
+        }
+    }
+}
+
+void tmap::MainGView::SLOT_EnableGridRestriction(bool enableRes)
+{
+    cout << "Nodes Grid restriction is " << (enableRes ? "ON" : "OFF") << endl;
+    mEnableNodeRestriction = enableRes;
+}
+
+void tmap::MainGView::restrictQNode(tmap::QNode* qNode)
+{
+    if (qNode &&
+        qNode->scene() == &mScene4FakeMap &&
+        qNode->expData()->type() != ExpDataType::Corridor) {
+        auto pos = qNode->pos();
+        auto roundedP = UIT::QPt2TopoVec(pos).round2(0.5);
+        qNode->setPos(UIT::TopoVec2QPt(roundedP));
+        qNode->notifyNeighbours2Move();
+    }
+}
+
+void tmap::MainGView::SLOT_StartDrawingEdge(bool enableDrawing)
+{
+    mIsDrawingEdge = enableDrawing;
+
+    if (enableDrawing) {
+        cout << "Left click at a gate and drag to another gate (or just on the ground) to "
+                "create a new Corridor Node" << endl;
+        setCursor(Qt::CrossCursor);
+    } else {
+        cout << "Drawing edge mode OFF" << endl;
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
+void tmap::MainGView::SLOT_RemoveSelectedNodes()
+{
+    int n = 0;
+    for (auto& item : mScene4FakeMap.selectedItems()) {
+        if (auto qNode = dynamic_cast<QNode*>(item)) {
+            qNode->breakLinks();
+            mNodesInFakeMap.erase(qNode->thisQnodePtr());
+            n++;
+        }
+    }
+    if (n > 0) {
+        cout << "Remove " << n << " node(s)" << endl;
+    }
+}
+
+void tmap::MainGView::mousePressEvent(QMouseEvent* event)
+{
+    QGraphicsView::mousePressEvent(event);
+    const auto & clickPosInView = event->pos();
+    const auto & clickPosInScene = mapToScene(clickPosInView);
+    auto item = scene()->itemAt(clickPosInScene);
+
+    if (item) {
+        if (auto clickedQNode = dynamic_cast<QNode*>(item)) {
+
+            /// 被点中的QNode的坐标系中点击的位置
+            const auto& clickPosInItem = clickedQNode->mapFromScene(clickPosInScene);
+            /// 被点中的QNode对应的ExpData数据
+            const auto& clickedExpData = clickedQNode->expData();
+
+            if (mIsDrawingEdge && event->button() == Qt::LeftButton) {
+                /**
+                 * @brief 画边模式
+                 */
+
+                /// 查找被点中的GateID
+                int clickedGateID = clickedExpData->
+                        findGateAtPos(UIT::QPt2TopoVec(clickPosInItem),UIT::pix2meter(15));
+
+                if (clickedGateID >= 0) {
+                    if (!clickedQNode->qNodeAt(clickedGateID)) {
+                        /// 这个Gate还没有连接任何的地方, 开始连接
+
+                        /// 被点中的Gate
+                        const auto& clickedGate = clickedExpData->getGates()[clickedGateID];
+                        /// 新Gate按照这个Gate制作
+                        auto newGate = clickedGate->clone();
+                        newGate->setPos({0,0});
+                        newGate->setNormalVec(clickedGate->getNormalVec().rotate(180));
+                        /// 开始制作新的Corridor
+                        auto newCorridor = make_shared<Corridor>();
+                        newCorridor->addGate(std::move(newGate));
+                        newCorridor->setEndGateA(0);
+                        /// 制作对应的QNode
+                        auto newQNode = QNode::makeOneFromExpData(newCorridor, mMoveStragety);
+                        /// 确保能够链接到正确的QNode上(其他的表层QNode)
+                        newQNode->setZValue(-2);
+                        /// 添加连接关系
+                        newQNode->setLinkAtIndex(0, clickedQNode->thisQnodePtr(),
+                                                 clickedGateID);
+                        /// 添加刚刚制作好的QNode
+                        mScene4FakeMap.addItem(newQNode.get());
+                        newQNode->setPos(clickedQNode->mapToScene(
+                                UIT::TopoVec2QPt(clickedGate->getPos())));
+                        mNodesInFakeMap.insert(newQNode);
+                        mTheDrawingCorridor = std::move(newQNode);
+                    }
+                }
+            }
+            else if (clickedQNode->expData()->type() == ExpDataType::Corridor
+                     && mAcceptAddingGate2Corridor
+                     && event->button() == Qt::LeftButton) {
+                /**
+                 * @brief 在Corridor上画Gate的模式
+                 */
+
+                auto clickedCorridor = dynamic_cast<Corridor*>(clickedExpData.get());
+                /// 通过点击位置计算得到对应的Gate位置参数
+                auto res = clickedCorridor->calPosAmdNvFromPointC(
+                        UIT::QPt2TopoVec(clickPosInItem));
+                clickedExpData->addGate(GatePtr{
+                    new Door(res.first, res.second, true)});
+                mTheDrawingCorridor = clickedQNode->thisQnodePtr();
+                mTheDrawingCorridor->notifySizeChange();
+            }
+            else if (mIsDrawingDirectLink && event->button() == Qt::LeftButton) {
+                /**
+                 * @brief 直接画Fake Line连接的模式
+                 */
+                /// 查找被点中的GateID
+                int clickedGateID = clickedExpData->
+                        findGateAtPos(UIT::QPt2TopoVec(clickPosInItem),UIT::pix2meter(15));
+                if (clickedGateID >= 0 && !clickedQNode->qNodeAt(clickedGateID)) {
+                    /// click在了一个Gate上, 而且这个Gate没有已经被连接
+                    const auto& gatePos = clickedQNode->gateQPos(clickedGateID, true);
+                    /// 创建FakeLine, 但是先不添加到Gate上
+                    auto fakeLine = make_shared<FakeLine_IMPL>
+                            (gatePos, gatePos, clickedQNode, clickedGateID);
+                    mScene4FakeMap.addItem(fakeLine.get());
+                    mTheDrawingFakeLine = std::move(fakeLine);
+                }
+            }
+        }
+    }
+
+
+
+
+    if (mAtSim && mRobot && event->button() & Qt::RightButton) {
+        if (mRobot->try2move(clickPosInScene)) {
+//            if (event->modifiers() & Qt::CTRL) {
+//                if (auto oldExp = mRobot->try2ThroughGate()) {
+//                    cout<<"oldExp is"<<endl;
+
+
+/* 修改json文件里程计信息 */
+
+
+
+
+                    string num,disx,disy,indoorID,leavedoorID;
+                    for(int i = 0 ;i<10;++i){
+                        ifstream fin("/home/zzw/id.txt");
+                        while(fin>>num){
+                            string filename = "/home/zzw/tmappingMaps/test"+num+".json";
+                            fin>>disx;
+                            fin>>disy;
+                            if(num == "2" || num == "4"){
+                                disx = disx +",";
+                                const char* xstr = disx.data();
+                                const char* ystr = disy.data();
+                                const char* p = filename.data();
+                                tmap::MainGView::ModifyLineData(p,11,xstr);
+                                tmap::MainGView::ModifyLineData(p,12,ystr);
+                                tmap::MainGView::ModifyLineData(p,38,xstr);
+                                tmap::MainGView::ModifyLineData(p,39,ystr);
+                            }
+
+                            Jsobj Jzzw = JsonHelper::loadJson(filename);
+//                            cout<<Jzzw["endP_B"]<<endl;
+                            fin>>indoorID;
+                            fin>>leavedoorID;
+                            int inID = atoi(indoorID.c_str());
+                            int leaveID = atoi(leavedoorID.c_str());
+                            auto test2 = ExpData::madeFromJS(Jzzw);
+                            int8_t gatetest = 1;
+                            Exp test3(test2, gatetest);
+
+                            test3.mEnterGate=inID;
+                            test3.mLeaveGate=leaveID;
+
+                            std::shared_ptr<Exp> test1 = make_shared<Exp>(test3); // Exp构造方法Exp(ExpDataPtr expData, GateID enterGateID);
+//                            cout<<JsonHelper::JS2Str(test1->toJS())<<endl;
+                            Q_EMIT SIG_RobotThroughGate(test1);
+                        }
+
+                    }
+
+
+//                    cout<<JsonHelper::JS2Str(oldExp->toJS())<<endl;
+//                    Q_EMIT SIG_RobotThroughGate(oldExp);
+//                }
+//            }
+            mRobot->atNode()->setSelected(true);
+        }
+    }
+}
+
+void tmap::MainGView::mouseMoveEvent(QMouseEvent* event)
+{
+    QGraphicsView::mouseMoveEvent(event);
+    const auto& clickPosInScene = mapToScene(event->pos());
+    if (mIsDrawingEdge && mTheDrawingCorridor) {
+        const auto& clickPosInQNode = mTheDrawingCorridor->mapFromScene(clickPosInScene);
+        dynamic_cast<Corridor*>(mTheDrawingCorridor->expData().get())
+                ->setEndPointB(UIT::QPt2TopoVec(clickPosInQNode));
+        mTheDrawingCorridor->notifySizeChange();
+    }
+    else if (mAcceptAddingGate2Corridor && mTheDrawingCorridor) {
+        const auto& clickPosInQNode = mTheDrawingCorridor->mapFromScene(clickPosInScene);
+        auto clickedCorridor = dynamic_cast<Corridor*>(mTheDrawingCorridor->expData().get());
+        auto res = clickedCorridor->calPosAmdNvFromPointC(UIT::QPt2TopoVec(clickPosInQNode));
+        auto theDrawingGate = mTheDrawingCorridor->expData()->getGates().back();
+        if (theDrawingGate->getNormalVec() != res.second) {
+            /// gate的方向改变了, 调整法向量并根据width调整位置
+            theDrawingGate->setNormalVec(res.second);
+            theDrawingGate->setPos(
+                    theDrawingGate->getPos() + res.second * 2 *clickedCorridor->halfWidth());
+            mTheDrawingCorridor->notifySizeChange();
+        }
+    }
+    else if (mIsDrawingDirectLink && mTheDrawingFakeLine) {
+        mTheDrawingFakeLine->setPoint(nullptr, clickPosInScene);
+    }
+    if (auto qNode = dynamic_cast<QNode*>(scene()->itemAt(clickPosInScene))) {
+        qNode->mouseHoverAt(qNode->mapFromScene(clickPosInScene));
+    }
+}
+
+void tmap::MainGView::mouseReleaseEvent(QMouseEvent* event)
+{
+    QGraphicsView::mouseReleaseEvent(event);
+    const auto & clickPosInView = event->pos();
+    const auto & clickPosInScene = mapToScene(clickPosInView);
+    auto item = scene()->itemAt(clickPosInScene);
+
+    /// FakeLine不在QNode的继承体系中, 可能会在空白处松开, 因此单独考虑
+    if (mIsDrawingDirectLink && mTheDrawingFakeLine) {
+        /**
+         * 画fakeLine的模式
+         */
+        if (auto clickedQNode = dynamic_cast<QNode*>(item)) {
+            if (clickedQNode != mTheDrawingCorridor.get()) {
+                /// 被点中的QNode的坐标系中的点击的位置
+                const auto& clickPosInItem = clickedQNode->mapFromScene(clickPosInScene);
+                /// 被点中的QNode对应的ExpData数据
+                const auto& clickedExpData = clickedQNode->expData();
+                /// 查找被点中的GateID
+                int clickedGateID = clickedExpData->findGateAtPos(
+                        UIT::QPt2TopoVec(clickPosInItem), UIT::pix2meter(15));
+                if (clickedGateID >= 0 && !clickedQNode->qNodeAt(clickedGateID)) {
+                    mTheDrawingFakeLine->setPoint(clickedQNode,
+                            clickedQNode->gateQPos(clickedGateID, true));
+                    auto theOriQNode = mTheDrawingFakeLine->oriNode();
+                    clickedQNode->setLinkAtIndex(clickedGateID,
+                                                 theOriQNode->shared_from_this(),
+                                                 mTheDrawingFakeLine->fromGate());
+                    clickedQNode->fakeLineAt(clickedGateID) = mTheDrawingFakeLine;
+                    theOriQNode->fakeLineAt(mTheDrawingFakeLine->fromGate()) =
+                            std::move(mTheDrawingFakeLine);
+                }
+            }
+        }
+        /// 没有点在正确的Gate上, 或者其他什么原因, 导致FakeLine没用, 直接删除
+        mTheDrawingFakeLine.reset();
+    }
+    else if (item) {
+        if (auto clickedQNode = dynamic_cast<QNode*>(item)) {
+            if (mEnableNodeRestriction) {
+                /**
+                 * 位置限定模式
+                 */
+                if (clickedQNode->expData()->type() != ExpDataType::Corridor) {
+                    restrictQNode(clickedQNode);
+                }
+            }
+            else if (mIsDrawingEdge && mTheDrawingCorridor) {
+                /**
+                 * Corridor链接模式
+                 */
+                if (clickedQNode != mTheDrawingCorridor.get()) {
+                    /// 被点中的QNode的坐标系中点击的位置
+                    const auto& clickPosInItem = clickedQNode->mapFromScene(clickPosInScene);
+                    /// 被点中的QNode对应的ExpData数据
+                    const auto& clickedExpData = clickedQNode->expData();
+                    /// 查找被点中的GateID
+                    int clickedGateID = clickedExpData->
+                            findGateAtPos(UIT::QPt2TopoVec(clickPosInItem),UIT::pix2meter(15));
+                    if (clickedGateID >= 0) {
+                        if (!clickedQNode->qNodeAt(clickedGateID)) {
+                            /// 这个Gate还没有连接任何的地方, 那就连接到这个Gate
+
+                            /// 被点中的Gate
+                            const auto& clickedGate = clickedExpData->getGates()[clickedGateID];
+                            /// 新Gate按照这个Gate制作
+                            auto newGate = clickedGate->clone();
+                            auto gatePosInClickedNode = UIT::TopoVec2QPt(clickedGate->getPos());
+                            auto gatePosInScene = clickedQNode->mapToScene(gatePosInClickedNode);
+                            auto gatePosInThis = mTheDrawingCorridor->mapFromScene(gatePosInScene);
+                            newGate->setPos(UIT::QPt2TopoVec(gatePosInThis));
+                            newGate->setNormalVec(clickedGate->getNormalVec().rotate(180));
+                            /// 添加新的Gate
+                            auto theDrawingCorridor = dynamic_cast<Corridor*>
+                            (mTheDrawingCorridor->expData().get());
+                            theDrawingCorridor->addGate(std::move(newGate));
+                            theDrawingCorridor->setEndGateB(1);
+                            if (theDrawingCorridor->getGates().size() != 2) {
+                                cerr << FILE_AND_LINE << " You add a gate before corridor complete!"
+                                     << endl;
+                            }
+                            /// 添加连接关系
+                            mTheDrawingCorridor->addNewLink(
+                                    clickedQNode->shared_from_this(), clickedGateID);
+                            /// 完成制作, 确定图形
+                            mTheDrawingCorridor->notifySizeChange();
+                            mTheDrawingCorridor->setZValue(0);
+                            mTheDrawingCorridor.reset();
+                            return;
+                        }
+                    }
+                    /// 松开的位置不在clickedNode的Gate上
+                    /// 没有松在Qnode上
+                    const auto& clickPosInQNode = mTheDrawingCorridor->mapFromScene(clickPosInScene);
+                    const auto& clickTopoPos = UIT::QPt2TopoVec(clickPosInQNode);
+                    Corridor* corr = dynamic_cast<Corridor*>(
+                            mTheDrawingCorridor->expData().get());
+                    auto newDoor = make_shared<Door>(
+                            clickTopoPos, clickTopoPos - corr->getEndPointA(), false);
+                    corr->addGate(std::move(newDoor));
+                    corr->setEndGateB(corr->nGates() - 1);
+                    mTheDrawingCorridor->addNewDanglingLink();
+                    mTheDrawingCorridor->notifySizeChange();
+                    mTheDrawingCorridor->setZValue(0);
+                    mTheDrawingCorridor.reset();
+                }
+                /// 没有松在Qnode上
+//                const auto& clickPosInQNode = mTheDrawingCorridor->mapFromScene(clickPosInScene);
+//                const auto& clickTopoPos = UIT::QPt2TopoVec(clickPosInQNode);
+//                Corridor* corr = dynamic_cast<Corridor*>(
+//                        mTheDrawingCorridor->expData().get());
+//                auto newDoor = make_shared<Door>(
+//                        clickTopoPos, clickTopoPos - corr->getEndPointA(), false);
+//                corr->addGate(std::move(newDoor));
+//                corr->setEndGateB(corr->nGates() - 1);
+//                mTheDrawingCorridor->addNewDanglingLink();
+//                mTheDrawingCorridor->notifySizeChange();
+//                mTheDrawingCorridor->setZValue(0);
+//                mTheDrawingCorridor.reset();
+            }
+        }
+    }
+
+    if (mAcceptAddingGate2Corridor && mTheDrawingCorridor) {
+        /// Corridor上画Gate的模式
+        const auto& clickPosInQNode = mTheDrawingCorridor->mapFromScene(clickPosInScene);
+        auto clickedCorridor = dynamic_cast<Corridor*>(mTheDrawingCorridor->expData().get());
+        auto res = clickedCorridor->calPosAmdNvFromPointC(UIT::QPt2TopoVec(clickPosInQNode));
+        auto theDrawingGate = mTheDrawingCorridor->expData()
+                ->getGates().back();
+        if (theDrawingGate->getNormalVec() != res.second) {
+            theDrawingGate->setNormalVec(res.second);
+            theDrawingGate->setPos(
+                    theDrawingGate->getPos() + res.second * 2 *clickedCorridor->halfWidth());
+        }
+
+        auto theAddedGate = clickedCorridor->popBackGate();
+        /// 检查添加的位置是否有太近的Gate
+        int clickedGateID = clickedCorridor->findGateAtPos(theAddedGate->getPos(), 0.5);
+        if (clickedGateID >= 0) {
+            cout << FILE_AND_LINE << " The clicked Pos is too close to an exist "
+                                     "Gate" << endl;
+        } else {
+            clickedCorridor->addGate(std::move(theAddedGate));
+            mTheDrawingCorridor->addNewDanglingLink();
+            cout << FILE_AND_LINE << " Added a gate" << endl;
+        }
+        mTheDrawingCorridor->notifySizeChange();
+        mTheDrawingCorridor.reset();
+    }
+
+}
+
+void tmap::MainGView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    QGraphicsView::mouseDoubleClickEvent(event);
+    const auto & clickPosInView = event->pos();
+    const auto & clickPosInScene = mapToScene(clickPosInView);
+    auto item = scene()->itemAt(clickPosInScene);
+
+    if (auto qNode = dynamic_cast<QNode*>(item)) {
+        auto str = JsonHelper::JS2Str(qNode->expData()->toJS(), false);
+        SIG_ShowStrInInfoView(str.data());
+    }
+}
+
+void tmap::MainGView::saveFakeMap(const std::string& mapName)
+{
+    vector<MapNodePtr> nodes{mNodesInFakeMap.begin(), mNodesInFakeMap.end()};
+    for (auto& node : mNodesInFakeMap) {
+        node->normalizePos();
+    }
+    int res = JsonHelper::saveJson(
+            StructedMapImpl(nodes, nullptr, 1.0).toJS(), mapName, false);
+    if (res < 0) {
+        cerr << FILE_AND_LINE << "Save Json ERROR!" << endl;
+    } else {
+        cout << "map save success! [name:" << mapName << "]" << endl;
+    }
+}
+
+void tmap::MainGView::saveRealMap(const std::string& mapName)
+{
+    int res = JsonHelper::saveJson(
+            currentDisplayedRealTimeMap->toJS(),
+            mapName,
+            false);
+}
+
+tmap::MainGView::~MainGView()
+{
+    /// QNode是智能指针管理的, 不要交给scene校徽
+    mNodesInFakeMap.clear();
+}
+
+void tmap::MainGView::loadMap(const std::string& fileName)
+{
+    Jsobj jMap = JsonHelper::loadJson(fileName);
+    if (jMap.isNull()) {
+        cerr << FILE_AND_LINE << " load Map json FAIL " << endl;
+        return;
+    }
+    /// 读取Json文件成功
+
+    /// 为了维护正确的依赖关系, 构造出只含有MapNode的Map, 再从这些MapNode生成QNode
+    /// 由于底层大量数据是复用的, 这里基本只有指针的复制
+    StructedMapImpl map(jMap);
+    const auto& nodes = map.getNodes();
+    vector<QNodePtr> qNodes(nodes.size());
+
+    for (int i = 0; i < nodes.size(); ++i) {
+        qNodes[i] = QNode::makeOneFromMergedExp(nodes[i]->getRelatedMergedExp(), mMoveStragety);
+    }
+
+    /// links的内容需要被更新, 连接对象的指针需要被更改
+    for (int i = 0; i < nodes.size(); ++i) {
+        for (int j = 0; j < nodes[i]->nLinks(); ++j) {
+            qNodes[i]->linkAt(j).at = nodes[i]->linkAt(j).at;
+            const auto& toNode = nodes[i]->linkAt(j).to.lock();
+            if (toNode) {
+                qNodes[i]->linkAt(j).to = qNodes[toNode->getSerial()];
+            }
+        }
+    }
+
+    /// 开始BFS构造地图
+    mNodesInFakeMap.clear();
+    bool once = false;
+    for (auto& qNode : qNodes) {
+        /// 为了处理拓扑不相连的情况, 对qNodes中所有成员进行BFS, 理论上其实下面这个if只发生一次
+        if (mNodesInFakeMap.find(qNode) == mNodesInFakeMap.end()) {
+            if (once) {
+                /// 发生了两次, 说明存在不相连的情况
+                cout << FILE_AND_LINE << " this map doesnt fully connected!" << endl;
+            } else {
+                once = true;
+            }
+            /// BFS使用的队列
+            queue<QNode*> lookupQueue;
+            /// BFS中的元素是已经添加过的QNode
+            lookupQueue.push(qNode.get());
+            qNode->setPos(0., 0.);
+            mScene4FakeMap.addItem(qNode.get());
+            mNodesInFakeMap.insert(std::move(qNode));
+
+            while (!lookupQueue.empty()) {
+                auto& currentQnode = lookupQueue.front();
+                lookupQueue.pop();
+                /// 查找所有的连接
+                for (int currentGID = 0; currentGID < currentQnode->nLinks(); ++currentGID) {
+                    auto linkedGID = currentQnode->linkedGIDAt(currentGID);
+                    auto linkedQNode = currentQnode->qNodeAt(currentGID);
+                    /// 是否与实际的QNode相连?
+                    if (linkedQNode) {
+                        /// 计算QNode应该放置的位置
+                        auto currentLinkGatePos = currentQnode->mapToScene(UIT::TopoVec2QPt(
+                                currentQnode->expData()->getGates()[currentGID]->getPos()));
+                        auto anotherGatePosInNode = UIT::TopoVec2QPt(
+                                linkedQNode->expData()->getGates()[linkedGID]->getPos());
+                        /// 是否已经被遍历过? (有没有被添加进scene?)
+                        if (linkedQNode->scene()) {
+                            auto anotherGatePosInScene =
+                                    linkedQNode->mapToScene(anotherGatePosInNode);
+                            if (anotherGatePosInScene != currentLinkGatePos) {
+                                /// 另外一个相连的Node已经被遍历过, 但是位置没有匹配, 建立FakeLine
+                                auto fakeLine = make_shared<FakeLine_IMPL>(currentLinkGatePos,
+                                                                           anotherGatePosInScene,
+                                                                           currentQnode,
+                                                                           currentGID);
+                                mScene4FakeMap.addItem(fakeLine.get());
+                                currentQnode->fakeLineAt(currentGID) = fakeLine;
+                                linkedQNode->fakeLineAt(linkedGID) = std::move(fakeLine);
+                            }
+                        } else {
+                            /// 没有被遍历过, 则加入scene以及collection
+                            linkedQNode->setPos(currentLinkGatePos - anotherGatePosInNode);
+                            mNodesInFakeMap.insert(linkedQNode);
+                            mScene4FakeMap.addItem(linkedQNode.get());
+                            lookupQueue.push(linkedQNode.get());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (auto& node : mNodesInFakeMap) {
+        setQNodeMovabilityInFakeMap(node.get());
+    }
+}
+
+void tmap::MainGView::SLOT_AcceptAddingGates2Corridor(bool acceptAdding)
+{
+    mAcceptAddingGate2Corridor = acceptAdding;
+    if (acceptAdding) {
+        cout << "click the pos where you want to add the door, then drag the direction" << endl;
+        setCursor(Qt::CrossCursor);
+    } else {
+        cout << "Add Gate to Corridor mode OFF" << endl;
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
+void tmap::MainGView::keyPressEvent(QKeyEvent* event)
+{
+    QGraphicsView::keyReleaseEvent(event);
+    switch (event->key()) {
+        case Qt::Key_D:
+            if (auto fakeLine = dynamic_cast<FakeLine_IMPL*>(scene()->selectedItems().first())){
+                if (event->modifiers() & Qt::ShiftModifier) {
+                    fakeLine->oriNode()->breakLinkAt(fakeLine->fromGate());
+                } else {
+                    auto socket = fakeLine->oriNode();
+                    auto socketGID = fakeLine->fromGate();
+                    auto plug = socket->qNodeAt(socketGID).get();
+                    auto plugGID = socket->linkedGIDAt(socketGID);
+                    if (event->modifiers() & Qt::CTRL) {
+                        std::swap(socket, plug);
+                        std::swap(socketGID, plugGID);
+                    }
+                    auto socketPos = socket->gateQPos(socketGID);
+                    auto plugPos = plug->gateQPos(socket->linkedGIDAt(socketGID), false);
+                    plug->setPos(socketPos - plugPos);
+                    plug->notifyNeighbours2Move();
+                    socket->fakeLineAt(socketGID).reset();
+                    plug->fakeLineAt(plugGID).reset();
+                }
+            } else if (auto qnode = dynamic_cast<QNode*>(scene()->selectedItems().first())) {
+                if (event->modifiers() & Qt::ShiftModifier) {
+                    qnode->breakLinks();
+                }
+                return;
+            }
+        case Qt::Key_Delete:
+            SLOT_RemoveSelectedNodes();
+            break;
+        case Qt::Key_M: {
+            QNode* a = nullptr;
+            QNode* b = nullptr;
+            for(const auto& item : mScene4FakeMap.selectedItems()) {
+                if (auto node = dynamic_cast<QNode*>(item)) {
+                    if (a == nullptr) {
+                        a = node;
+                        continue;
+                    } else {
+                        b = node;
+                        break;
+                    }
+                }
+            }
+            if (a && b) {
+                auto res = a->expData()->detailedMatch(*b->expData());
+                this->addNode2FakeMapFromExpData(res->mergedExpData);
+            }
+        }
+            break;
+        case Qt::Key_V: {
+            if (scene() == &mScene4FakeMap) {
+                for (auto item : mScene4FakeMap.selectedItems()) {
+                    if (auto qNode = dynamic_cast<QNode*>(item)) {
+                        addNode2FakeMapFromExpData(qNode->expData()->clone());
+                    }
+                }
+            }
+        }
+        default:
+            break;
+    }
+}
+
+void tmap::MainGView::SLOT_StartDirectLinking(bool startLink)
+{
+    mIsDrawingDirectLink = startLink;
+    if (startLink) {
+        cout << "Left click at a gate and drag to another gate to link them" << endl;
+        setCursor(Qt::CrossCursor);
+    } else {
+        cout << "Direct link mode OFF" << endl;
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
+void tmap::MainGView::SLOT_SetMoveStrategy(int strategy)
+{
+    auto moveStragety = static_cast<MoveStragety>(strategy);
+    for (auto& item : this->items()) {
+        if (auto qnode = dynamic_cast<QNode*>(item)) {
+            qnode->setMoveStragety(moveStragety);
+        }
+    }
+}
+
+void tmap::MainGView::switch2realMode(bool toReal)
+{
+    if (toReal) {
+        setScene(&mScene4RealMap);
+    } else {
+        setScene(&mScene4FakeMap);
+    }
+}
+
+void tmap::MainGView::switch2simMode(bool toSim)
+{
+    mAtSim = toSim;
+
+    if (toSim) {
+        for (auto& item : mScene4FakeMap.items()) {
+            item->setFlag(QGraphicsItem::ItemIsMovable, false);
+        }
+        if (mRobot) {
+            mRobot->setVisible(true);
+            mRobot->updatePos();
+        }
+    } else {
+        for (auto& item : mScene4FakeMap.items()) {
+            if (auto qNode = dynamic_cast<QNode*>(item)) {
+                setQNodeMovabilityInFakeMap(qNode);
+            }
+        }
+
+        if (mRobot) {
+            mRobot->setVisible(false);
+        }
+    }
+}
+
+bool tmap::MainGView::setRobotInFake(bool directMove)
+{
+    if (!mScene4FakeMap.selectedItems().empty()) {
+        if (auto qNode = dynamic_cast<QNode*>(mScene4FakeMap.selectedItems().front())) {
+            auto ptr = qNode->thisQnodePtr();
+            mRobot.reset(new QRobot(ptr, directMove));
+            return true;
+        }
+    }
+    return false;
+}
+
+void tmap::MainGView::setQNodeMovabilityInFakeMap(tmap::QNode* node) const
+{
+    if (mEnableFakeNodesMoving) {
+        if (node->expData()->type() != ExpDataType::Corridor) {
+            node->setFlag(QGraphicsItem::ItemIsMovable);
+        } else {
+            if (mMoveStragety == MoveStragety::NO_NODE_FOLLOW) {
+                node->setFlag(QGraphicsItem::ItemIsMovable);
+            }
+        }
+    } else {
+        node->setFlag(QGraphicsItem::ItemIsMovable, false);
+    }
+}
+
+void tmap::MainGView::setQNodeMovabilityInRealMap(tmap::QNode* node) const
+{
+    node->setFlag(QGraphicsItem::ItemIsMovable, mEnableRealNodesMoving);
+}
+
+void tmap::MainGView::displayRealMap(const Jsobj& jMap)
+{
+    currentDisplayedRealTimeMap = make_shared<StructedMapImpl>(jMap);
+    const auto& nodes = currentDisplayedRealTimeMap->getNodes();
+    vector<QNodePtr> qNodes(nodes.size());
+
+    /// 复制一份QNode
+    for (int i = 0; i < nodes.size(); ++i) {
+        qNodes[i] = QNode::makeOneFromMergedExp(nodes[i]->getRelatedMergedExp(),
+                MoveStragety::ONLY_FIXED_TYPE);
+    }
+
+    /// links的内容需要被更新, 连接对象的指针需要被更改
+    for (int i = 0; i < nodes.size(); ++i) {
+        for (int j = 0; j < nodes[i]->nLinks(); ++j) {
+            qNodes[i]->linkAt(j).at = nodes[i]->linkAt(j).at;
+            const auto& toNode = nodes[i]->linkAt(j).to.lock();
+            if (toNode) {
+                qNodes[i]->linkAt(j).to = qNodes[toNode->getSerial()];
+            }
+        }
+    }
+
+    /// 开始BFS构造地图
+    mNodesInRealMap.clear();
+    bool once = false;
+    for (auto& qNode : qNodes) {
+        /// 为了处理拓扑不相连的情况, 对qNodes中所有成员进行BFS, 理论上其实下面这个if只发生一次
+        if (mNodesInRealMap.find(qNode) == mNodesInRealMap.end()) {
+            if (once) {
+                /// 发生了两次, 说明存在不相连的情况
+                cout << FILE_AND_LINE << " this map doesnt fully connected!" << endl;
+            } else {
+                once = true;
+            }
+            /// BFS使用的队列
+            queue<QNode*> lookupQueue;
+            /// BFS中的元素是已经添加过的QNode
+            lookupQueue.push(qNode.get());
+            qNode->setPos(0., 0.);
+            mScene4RealMap.addItem(qNode.get());
+            mNodesInRealMap.insert(qNode);
+
+            while (!lookupQueue.empty()) {
+                auto currentQnode = lookupQueue.front();
+                lookupQueue.pop();
+                /// 查找所有的连接
+                for (int currentGID = 0; currentGID < currentQnode->nLinks(); ++currentGID) {
+                    auto linkedGID = currentQnode->linkedGIDAt(currentGID);
+                    auto linkedQNode = currentQnode->qNodeAt(currentGID);
+                    /// 是否与实际的QNode相连?
+                    if (linkedQNode) {
+                        /// 计算QNode应该放置的位置
+                        auto currentLinkGatePos = currentQnode->mapToScene(UIT::TopoVec2QPt(
+                                currentQnode->expData()->getGates()[currentGID]->getPos()));
+                        auto anotherGatePosInNode = UIT::TopoVec2QPt(
+                                linkedQNode->expData()->getGates()[linkedGID]->getPos());
+                        /// 是否已经被遍历过? (有没有被添加进scene?)
+                        if (linkedQNode->scene()) {
+                            auto anotherGatePosInScene =
+                                    linkedQNode->mapToScene(anotherGatePosInNode);
+                            if (anotherGatePosInScene != currentLinkGatePos) {
+                                /// 另外一个相连的Node已经被遍历过, 但是位置没有匹配, 建立FakeLine
+                                auto fakeLine = make_shared<FakeLine_IMPL>(currentLinkGatePos,
+                                        anotherGatePosInScene,
+                                        currentQnode,
+                                        currentGID);
+                                mScene4RealMap.addItem(fakeLine.get());
+                                currentQnode->fakeLineAt(currentGID) = fakeLine;
+                                linkedQNode->fakeLineAt(linkedGID) = std::move(fakeLine);
+                            }
+                        } else {
+                            /// 没有被遍历过, 则加入scene以及collection
+                            linkedQNode->setPos(currentLinkGatePos - anotherGatePosInNode);
+                            mNodesInRealMap.insert(linkedQNode);
+                            mScene4RealMap.addItem(linkedQNode.get());
+                            lookupQueue.push(linkedQNode.get());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!qNodes.empty()) {
+        /// 如果一切正常的话,这个0号就是机器人的位置
+        qNodes[0]->setSelected(true);
+    }
+
+    for (auto& node : mNodesInRealMap) {
+        setQNodeMovabilityInRealMap(node.get());
+    }
+}
+
+void tmap::MainGView::randomMove(int mSteps, bool untilCover)
+{
+    int nMoreSteps = 25;
+    if (mAtSim && mRobot) {
+        if (untilCover) {
+
+            nPassedNodes = 0;
+            for (auto& node : mNodesInFakeMap) {
+                node->setPassed(false);
+            }
+
+            while (true) {
+                emitRobotRandomMove();
+                if (nPassedNodes >= mNodesInFakeMap.size()) {
+                    /// 在完全覆盖后,会继续移动5步
+                    if (nMoreSteps > 0) {
+                        nMoreSteps--;
+                    } else {
+                        /// 冠军地图是否已经保留超过15轮, 或者额外步数mSteps已经用尽
+                        if (nChampionSucceedSteps > 15 || mSteps < 0) {
+                            break;
+                        } else {
+                            mSteps--;
+                        }
+                    }
+                }
+            }
+        } else {
+            for (int i = 0; i < mSteps; ++i) {
+                emitRobotRandomMove();
+            }
+        }
+    } else {
+        cout << "[Warnning] you havn't set the robot!" << endl;
+    }
+}
+
+std::string tmap::MainGView::currentPossHistoryStr()
+{
+    const auto& possHistory = currentDisplayedRealTimeMap->getPossHistory();
+    stringstream ss;
+    for (const auto& poss: possHistory) {
+        ss << poss << endl;
+    }
+    return ss.str();
+}
+
+void tmap::MainGView::emitRobotRandomMove()
+{
+    static default_random_engine engine(
+            std::chrono::system_clock::now().time_since_epoch().count());
+
+    const auto& expData = mRobot->atNode()->expData();
+
+    vector<GateID> options;
+    for (int i = 0; i < expData->nGates(); ++i) {
+        if (i != mRobot->enterGate() && mRobot->atNode()->qNodeAt(i)) {
+            /// 我们不希望原路返回, 同时要的确通向一个gate
+            options.push_back(i);
+        }
+    }
+
+    GateID pickedGate;
+    if (options.empty()) {
+        /// 没有选项,那就只能原路返回
+        pickedGate = mRobot->enterGate();
+    } else {
+        uniform_int_distribution<int> u(0, options.size() - 1);
+        pickedGate = options[u(engine)];
+    }
+
+    if (!mRobot->atNode()->isPassed()) {
+        mRobot->atNode()->setPassed(true);
+        nPassedNodes ++;
+    }
+
+    mRobot->atNode()->scene()->clearSelection();
+    mRobot->atNode()->setSelected(true);
+
+    auto oldExp = mRobot->moveThroughGate(pickedGate);
+    Q_EMIT SIG_RobotThroughGate(oldExp);
+}
+
+void tmap::MainGView::setChampionSucceedSteps(size_t steps)
+{
+    MainGView::nChampionSucceedSteps = steps;
+}
+
+bool tmap::MainGView::isTheRealTimeMapSimiliar()
+{
+    return
+    mNodesInFakeMap.size() == currentDisplayedRealTimeMap->getNodes().size();
+}
+
+QGraphicsScene* tmap::MainGView::getScene4FakeMap()
+{
+    return &mScene4FakeMap;
+}
+
+QGraphicsScene* tmap::MainGView::getScene4RealMap()
+{
+    return &mScene4RealMap;
+}
+

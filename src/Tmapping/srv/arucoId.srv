@@ -1,0 +1,6 @@
+int64 num
+float64 disx
+float64 disy
+int64 indoor
+int64 leavedoor
+---
