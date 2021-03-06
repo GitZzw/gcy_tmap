@@ -2,11 +2,11 @@
 
 ## 三个建图过程的例子
 ### 八点图
-![](./src/tmapping/videos/8g.gif)
+![](https://github.com/GitZzw/gcy_tmap/blob/master/src/Tmapping/videos/8g.gif)
 ### 田字图
-![](./src/tmapping/videos/33.gif)
+![](https://github.com/GitZzw/gcy_tmap/blob/master/src/Tmapping/videos/8g.gif)
 ### 室内大尺寸环境
-![](./src/tmapping/videos/big.gif)
+![](https://github.com/GitZzw/gcy_tmap/blob/master/src/Tmapping/videos/big.gif)
 
 #安装
 #### 将代码拷贝至catkin_ws的src文件夹下
