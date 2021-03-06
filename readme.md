@@ -2,11 +2,11 @@
 
 ## 三个建图过程的例子
 ### 八点图
-![](videos/8g.gif)
+![](src/tmapping/videos/8g.gif)
 ### 田字图
-![](videos/33.gif)
+![](src/tmapping/videos/33.gif)
 ### 室内大尺寸环境
-![](videos/big.gif)
+![](src/tmapping/videos/big.gif)
 
 #安装
 #### 将代码拷贝至catkin_ws的src文件夹下
