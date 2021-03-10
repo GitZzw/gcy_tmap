@@ -50,6 +50,7 @@ class MainGView : public QGraphicsView
 
 public:
     size_t nMovedSteps = 0;
+    int number_t = 0;
 
 private:
     void setQNodeMovabilityInFakeMap(QNode* node) const;

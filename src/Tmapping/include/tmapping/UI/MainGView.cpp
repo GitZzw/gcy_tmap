@@ -264,13 +264,20 @@ void tmap::MainGView::mousePressEvent(QMouseEvent* event)
 
 
                     string num,disx,disy,indoorID,leavedoorID;
-                    for(int i = 0 ;i<10;++i){
-                        ifstream fin("/home/zzw/id.txt");
+                    for(int i = 0 ;i<1;++i){
+                        ifstream fin("/home/zzw/reload/"+to_string(number_t)+".txt");
                         while(fin>>num){
-                            string filename = "/home/zzw/tmappingMaps/test"+num+".json";
+                            string filename = "/home/zzw/tmappingMaps/experiment/"+num+".json";
                             fin>>disx;
                             fin>>disy;
-                            if(num == "2" || num == "4"){
+                            fin>>indoorID;
+                            fin>>leavedoorID;
+                            cout<<"Aruco ID is:      "<<num<<endl;
+                            cout<<"delta(x,y) is:    "<< "("<<disx <<","<<disy<<")"<<endl;
+                            cout<<"Indoor ID is:     "<<indoorID<<endl;
+                            cout<<"leave door ID is: "<< leavedoorID<<endl;
+                            cout<<"==============================="<<endl;
+                            if(num == "9" || num == "10"){
                                 disx = disx +",";
                                 const char* xstr = disx.data();
                                 const char* ystr = disy.data();
@@ -283,8 +290,7 @@ void tmap::MainGView::mousePressEvent(QMouseEvent* event)
 
                             Jsobj Jzzw = JsonHelper::loadJson(filename);
 //                            cout<<Jzzw["endP_B"]<<endl;
-                            fin>>indoorID;
-                            fin>>leavedoorID;
+
                             int inID = atoi(indoorID.c_str());
                             int leaveID = atoi(leavedoorID.c_str());
                             auto test2 = ExpData::madeFromJS(Jzzw);
@@ -297,6 +303,7 @@ void tmap::MainGView::mousePressEvent(QMouseEvent* event)
                             std::shared_ptr<Exp> test1 = make_shared<Exp>(test3); // Exp构造方法Exp(ExpDataPtr expData, GateID enterGateID);
 //                            cout<<JsonHelper::JS2Str(test1->toJS())<<endl;
                             Q_EMIT SIG_RobotThroughGate(test1);
+                            number_t++;
                         }
 
                     }
