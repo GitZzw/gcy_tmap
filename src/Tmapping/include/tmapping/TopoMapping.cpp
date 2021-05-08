@@ -8,7 +8,7 @@
 #include "MergedExp.h"
 #include "Exp.h"
 #include "StructedMap.h"
-
+#include <fstream> 
 #include <iostream>
 #include <unordered_set>
 
@@ -103,6 +103,11 @@ void tmap::TopoMapping::arriveNewExp(const tmap::ExpPtr& newExp)
     twigCollection.nextgCompleteAdding(nSurviverMaps, newExp->serial() + 1);
 
     const auto& aliveTwigs = twigCollection.getAliveMaps();
+
+    ofstream outfile("/home/hjk/pro.txt", ios::app); 
+    outfile << mExperiences.nExps() << "\t" << twigCollection.getAliveMaps().size()<< "\t";
+    outfile.close();
+
     cout << "\n\nSteps:" << mExperiences.nExps()
        << "\nnumber of alive maps :" << twigCollection.getAliveMaps().size()
        << "\n------------------------" << endl;
