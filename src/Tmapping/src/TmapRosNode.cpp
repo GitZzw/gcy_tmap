@@ -71,7 +71,7 @@ static double temp;
 
 bool TmapRosNode::cbSrvAruco(tmapping::arucoIdRequest& req, tmapping::arucoIdResponse& res) {
     cout<<"get aruco ID"<<endl;
-    ofstream fout("/home/zzw/id.txt",ios_base::app); //创建待写入数据文件
+    ofstream fout("/home/uav/id.txt",ios_base::app); //创建待写入数据文件
     int aruID = req.num;
     int indoorID = req.indoor;
     int leavedoorID = req.leavedoor;
@@ -154,15 +154,15 @@ bool TmapRosNode::cbSrvNewExp(tmapping::NewExpRequest& req,
 bool TmapRosNode::cbSrvGateMovement(tmapping::GateMovementRequest& req,
                                     tmapping::GateMovementResponse& res)
 {
-    cout << "get gate movement info" << endl;
+//    cout << "get gate movement info" << endl;
     auto startTime = std::chrono::system_clock::now();
-    cout<<"jGateMove is "<<req.jGateMove<<endl;
+//    cout<<"jGateMove is "<<req.jGateMove<<endl;
     auto gateID = JsonHelper::Str2JS(req.jGateMove).asInt();
     mTmappingCore->setLeftGate(gateID);
 #if TMAPPING_CONFIG_LOG_TIME
     auto endTime = std::chrono::system_clock::now();
     std::chrono::duration<double> diff(endTime - startTime);
-    cout << diff.count() << '\t' << diff.count() + temp << endl;
+//    cout << diff.count() << '\t' << diff.count() + temp << endl;
 #endif
     return true;
 }

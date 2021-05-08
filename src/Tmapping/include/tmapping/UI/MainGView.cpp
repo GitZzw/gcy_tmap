@@ -249,8 +249,6 @@ void tmap::MainGView::mousePressEvent(QMouseEvent* event)
     }
 
 
-
-
     if (mAtSim && mRobot && event->button() & Qt::RightButton) {
         if (mRobot->try2move(clickPosInScene)) {
 //            if (event->modifiers() & Qt::CTRL) {
@@ -265,9 +263,9 @@ void tmap::MainGView::mousePressEvent(QMouseEvent* event)
 
                     string num,disx,disy,indoorID,leavedoorID;
                     for(int i = 0 ;i<1;++i){
-                        ifstream fin("/home/zzw/reload/"+to_string(number_t)+".txt");
+                        ifstream fin("/home/uav/reload/"+to_string(number_t)+".txt");
                         while(fin>>num){
-                            string filename = "/home/zzw/tmappingMaps/experiment/"+num+".json";
+                            string filename = "/home/uav/tmappingMaps/experiment/"+num+".json";
                             fin>>disx;
                             fin>>disy;
                             fin>>indoorID;

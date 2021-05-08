@@ -709,7 +709,7 @@ void tmap::TmapUI::SLOT_GetRealtimeMaps()
 
     if (RSC_getMaps.call(infoBridge)) {
         realtimeMaps = JsonHelper::Str2JS(infoBridge.response.jMaps);
-        //cout<<realtimeMaps<<endl;
+//        cout<<realtimeMaps<<endl;
         infoView->setText("realtimeMaps received!");
 
 #ifdef TMAPPING_CONFIG_RECORD_POSS
